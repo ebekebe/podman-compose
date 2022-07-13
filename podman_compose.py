@@ -1863,7 +1863,11 @@ def compose_push(compose, args):
             continue
         if services and cnt["_service"] not in services:
             continue
-        exit_code = compose.podman.run([], "push", [cnt["image"]], sleep=0).wait()
+        exit_code = 0
+        if getattr(args, "all_platforms", None):
+            exit_code = compose.podman.run([], "manifest", ["push", "--all", cnt["image"], "docker://" + cnt["image"]], sleep=0).wait()
+        else:
+            exit_code = compose.podman.run([], "push", [cnt["image"]], sleep=0).wait()
         if (not getattr(args, "ignore_push_failures", None)) and 0 != exit_code:
             sys.exit(exit_code)
 
@@ -1902,7 +1906,13 @@ def build_one(compose, args, cnt):
                 break
     if not os.path.exists(dockerfile):
         raise OSError("Dockerfile not found in " + ctx)
-    build_args = ["-t", cnt["image"], "-f", dockerfile]
+    build_args = []
+    if 1 < len(args.platform):
+        if 0 == compose.podman.run([], "manifest", ["exists", cnt["image"]], sleep=0).wait():
+            compose.podman.run([], "manifest", ["rm", cnt["image"]], sleep=0)
+        build_args.extend(["--manifest", cnt["image"], "-f", dockerfile])
+    else:
+        build_args.extend(["-t", cnt["image"], "-f", dockerfile])
     if "target" in build_desc:
         build_args.extend(["--target", build_desc["target"]])
     container_to_ulimit_args(cnt, build_args)
@@ -1920,6 +1930,8 @@ def build_one(compose, args, cnt):
                 build_arg,
             )
         )
+    for platform in args.platform:
+        build_args.extend(["--platform", platform])
     build_args.append(ctx)
     exit_code = compose.podman.run([], "build", build_args, sleep=0).wait()
     if 0 != exit_code:
@@ -2673,6 +2685,11 @@ def compose_pull_parse(parser):
 @cmd_parse(podman_compose, "push")
 def compose_push_parse(parser):
     parser.add_argument(
+        "--all-platforms",
+        action="store_true",
+        help="Push manifest and all images of a multi-platform build.",
+    )
+    parser.add_argument(
         "--ignore-push-failures",
         action="store_true",
         help="Push what it can and ignores images with push failures.",
@@ -2723,6 +2740,13 @@ def compose_build_parse(parser):
         nargs="*",
         default=None,
         help="affected services",
+    )
+    parser.add_argument(
+        "--platform",
+        metavar="val",
+        action="append",
+        default=[],
+        help="Set the OS/ARCH of the built image. When more than one platform is specified, the --manifest option will be passed to podman build.",
     )
 
 
